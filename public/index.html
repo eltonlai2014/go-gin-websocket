@@ -1,0 +1,65 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Gin WS Chat Demo</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; }
+    #log { border: 1px solid #ddd; padding: .75rem; height: 300px; overflow: auto; white-space: pre-wrap; }
+    #status { margin-bottom: .5rem; }
+  </style>
+</head>
+<body>
+  <h1>Gin + WebSocket Chat</h1>
+  <div id="status">Connecting...</div>
+  <div id="log"></div>
+  <form id="form">
+    <input id="input" placeholder="Type a message..." style="width: 70%;"/>
+    <button>Send</button>
+  </form>
+  <script>
+    const logEl = document.getElementById('log');
+    const statusEl = document.getElementById('status');
+    const input = document.getElementById('input');
+    const form = document.getElementById('form');
+
+    const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+
+    ws.addEventListener('open', () => {
+      statusEl.textContent = 'Connected';
+    });
+
+    ws.addEventListener('close', () => {
+      statusEl.textContent = 'Disconnected';
+    });
+
+    ws.addEventListener('message', (ev) => {
+      const lines = String(ev.data).split('\n');
+      for (const line of lines) {
+        try {
+          const obj = JSON.parse(line);
+          if (obj && obj.type === 'server_broadcast') {
+            append(`[SERVER] ${obj.time} → ${obj.message}`);
+            continue;
+          }
+        } catch (_) {}
+        append(line);
+      }
+    });
+
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const msg = input.value.trim();
+      if (!msg) return;
+      ws.send(msg);
+      input.value = '';
+    });
+
+    function append(txt) {
+      const atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 1;
+      logEl.textContent += (logEl.textContent ? '\n' : '') + txt;
+      if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+    }
+  </script>
+</body>
+</html>
