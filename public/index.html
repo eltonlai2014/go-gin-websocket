@@ -7,7 +7,6 @@
     body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; }
     #log { border: 1px solid #ddd; padding: .75rem; height: 300px; overflow: auto; white-space: pre-wrap; }
     #status { margin-bottom: .5rem; }
-    #status small { color:#666; }
   </style>
 </head>
 <body>
@@ -18,141 +17,49 @@
     <input id="input" placeholder="Type a message..." style="width: 70%;"/>
     <button>Send</button>
   </form>
-
   <script>
     const logEl = document.getElementById('log');
     const statusEl = document.getElementById('status');
     const input = document.getElementById('input');
     const form = document.getElementById('form');
 
-    const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+    const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
 
-    // ===== 重連相關設定 =====
-    const BASE_DELAY = 1000;     // 初始延遲 1s
-    const MAX_DELAY  = 15000;    // 最長延遲 15s
-    const BACKOFF    = 1.7;      // 指數回退倍率
-    const JITTER     = 0.3;      // 抖動比例，避免同時風暴重連
+    ws.addEventListener('open', () => {
+      statusEl.textContent = 'Connected';
+    });
 
-    // ===== 心跳保活設定（前端定期送 ping）=====
-    const HEARTBEAT_INTERVAL = 15000;    // 每 15s 發送一次
-    const STALE_TIMEOUT      = 1200000;  // 1200s 未收到任何資料則視為失聯
+    ws.addEventListener('close', () => {
+      statusEl.textContent = 'Disconnected';
+    });
 
-    let ws = null;
-    let reconnectAttempt = 0;
-    let heartbeatTimer = null;
-    let staleTimer = null;
-    const outbox = []; // 斷線期間排隊的訊息
+    ws.addEventListener('message', (ev) => {
+      const lines = String(ev.data).split('\n');
+      for (const line of lines) {
+        try {
+          const obj = JSON.parse(line);
+          if (obj && obj.type === 'server_broadcast') {
+            append(`[SERVER] ${obj.time} → ${obj.message}`);
+            continue;
+          }
+        } catch (_) {}
+        append(line);
+      }
+    });
 
-    connect(); // 立即建立第一次連線
-
-    // 建立連線（含事件綁定）
-    function connect() {
-      const url = WS_URL;
-      ws = new WebSocket(url);
-
-      // --- 開啟連線 ---
-      ws.addEventListener('open', () => {
-        const label = reconnectAttempt > 0 ? `Reconnected (attempt ${reconnectAttempt})` : 'Connected';
-        statusEl.textContent = label;
-        reconnectAttempt = 0;
-
-        // 將排隊訊息依序發送
-        while (outbox.length > 0 && ws.readyState === WebSocket.OPEN) {
-          ws.send(outbox.shift());
-        }
-
-        startHeartbeat();
-        markActivity(); // 開啟後重設「無活動 watchdog」
-      });
-
-      // --- 收到訊息 ---
-      ws.addEventListener('message', (ev) => {
-        markActivity();
-        const lines = String(ev.data).split('\n');
-        for (const line of lines) {
-          try {
-            const obj = JSON.parse(line);
-            if (obj && obj.type === 'server_broadcast') {
-              append(`[SERVER] ${obj.time} → ${obj.message}`);
-              continue;
-            }
-          } catch (_) {}
-          append(line);
-        }
-      });
-
-      // --- 發生錯誤 ---
-      ws.addEventListener('error', () => {
-        // 多數情況由 close 事件統一處理，這裡只更新狀態
-        statusEl.textContent = 'Connection error';
-      });
-
-      // --- 關閉連線（統一進入重連流程）---
-      ws.addEventListener('close', () => {
-        stopHeartbeat();
-        scheduleReconnect();
-      });
-    }
-
-    // 送訊息（若未連線則排隊）
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       const msg = input.value.trim();
       if (!msg) return;
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(msg);
-      } else {
-        outbox.push(msg);
-      }
+      ws.send(msg);
       input.value = '';
     });
 
-    // ===== 重連流程 =====
-    function scheduleReconnect() {
-      reconnectAttempt++;
-      // 計算指數回退 + 抖動
-      const rawDelay = Math.min(MAX_DELAY, BASE_DELAY * Math.pow(BACKOFF, reconnectAttempt - 1));
-      const jittered = rawDelay * (1 - JITTER + Math.random() * 2 * JITTER);
-      statusEl.innerHTML = `Disconnected <small>— retry in ${Math.round(jittered)} ms (attempt ${reconnectAttempt})</small>`;
-      setTimeout(connect, jittered);
-    }
-
-    // ===== 心跳機制 =====
-    function startHeartbeat() {
-      stopHeartbeat(); // 確保沒有重複的計時器
-      heartbeatTimer = setInterval(() => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          try { ws.send('{"type":"ping"}'); } catch (_) {}
-        }
-      }, HEARTBEAT_INTERVAL);
-    }
-
-    function stopHeartbeat() {
-      clearInterval(heartbeatTimer);
-      heartbeatTimer = null;
-      clearTimeout(staleTimer);
-      staleTimer = null;
-    }
-
-    // 若太久沒任何訊息或互動，主動關閉讓它走重連
-    function markActivity() {
-      clearTimeout(staleTimer);
-      staleTimer = setTimeout(() => {
-        try { ws && ws.close(); } catch (_) {}
-      }, STALE_TIMEOUT);
-    }
-
-    // ===== UI 輔助 =====
     function append(txt) {
       const atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 1;
       logEl.textContent += (logEl.textContent ? '\n' : '') + txt;
       if (atBottom) logEl.scrollTop = logEl.scrollHeight;
     }
-
-    // 視窗切換可選擇暫停/恢復心跳（這裡保持簡單不做暫停）
-    document.addEventListener('visibilitychange', () => {
-      // 需要的話可在這裡 pause/resume 心跳
-    });
   </script>
 </body>
 </html>
