@@ -1,8 +1,11 @@
 package websocket
 
 import (
+	"bytes"
+	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -106,6 +109,24 @@ type client struct {
 	send chan []byte
 }
 
+// isAppPing 回傳是否為應用層 ping 訊息
+func isAppPing(b []byte) bool {
+	// fast path：完全等於 {"type":"ping"}（允許首尾空白）
+	trimmed := bytes.TrimSpace(b)
+	if bytes.Equal(trimmed, []byte(`{"type":"ping"}`)) {
+		return true
+	}
+	// robust path：解析 JSON，只看 type 欄位
+	var v struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(trimmed, &v); err == nil && strings.EqualFold(v.Type, "ping") {
+		return true
+	}
+	return false
+}
+
+// 接收 client 訊息
 func (c *client) readPump() {
 	defer func() {
 		c.hub.unregister <- c
@@ -124,10 +145,17 @@ func (c *client) readPump() {
 		if err != nil {
 			break
 		}
+		// 忽略應用層 ping，不做廣播
+		if isAppPing(message) {
+			// （可選）只回覆送出者一個 pong
+			// c.send <- []byte(`{"type":"pong"}`)
+			continue
+		}
 		c.hub.broadcast <- message
 	}
 }
 
+// 發送訊息 to client
 func (c *client) writePump() {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {

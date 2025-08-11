@@ -37,7 +37,7 @@ func main() {
 
 	// 可選參數：SendCap / MaxMessageSize / EnableCompression / CheckOrigin
 	hub := websocket.NewHub(&websocket.Options{
-		SendCap:           128,
+		SendCap:           256,
 		MaxMessageSize:    8192,
 		EnableCompression: true,
 		// CheckOrigin: func(r *http.Request) bool { return r.Host == "your.domain" },
